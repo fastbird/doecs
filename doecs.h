@@ -142,6 +142,7 @@ namespace de
 #endif
 			}
 		};
+		static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
 		static Chunk* RootChunk;
 		static std::unordered_map<EntityId, std::pair<Chunk*, uint32_t> > EntityToComponent;
 

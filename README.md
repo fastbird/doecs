@@ -7,10 +7,13 @@ Data Oriented Entity Component System framework.
   * Customizable cache line & chunk size. Default value is 64 bytes for cache line and 16 KB for chunks.
 * Single header file
   * Just drop it into your project
+
+
+## Requirement
 * Needs C++17 compiler
 
 
-# How to use
+## How to use
 For the concrete usage example, see ./Example/ project.
 
 For the Simpler explanation, check the following codes.
