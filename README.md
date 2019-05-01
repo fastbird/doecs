@@ -10,7 +10,7 @@ Data Oriented Entity Component System framework.
 
 
 ## Requirement
-* Needs C++17 compiler
+* C++17 compiler
 
 
 ## How to use
