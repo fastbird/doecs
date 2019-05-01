@@ -1,12 +1,14 @@
+#pragma once
+#ifndef __doecs_header__
+#define __doecs_header__
+
 #include <unordered_map>
 #include <array>
 #include <cstdlib>
 #include <mutex>
 
 // Create a cpp file and define IMPLEMENT_DOECS then include this header file.
-//#define IMPLEMENT_DOECS
-
-
+//#define IMPLEMENT_DOECS 1
 
 #define DeclareEntityArchetypePool(PoolName, ...) using PoolName = de::ArchetypePool<__VA_ARGS__>
 #define ImplementEntityArchetypePool(PoolName) PoolName::Chunk* PoolName::RootChunk = nullptr;\
@@ -18,9 +20,11 @@
 namespace de
 {
 	using EntityId = uint64_t;
+
 	constexpr int ChunkSize = 16 * 1024; // Usually CPU has 32 kb L1 cache and I decide to use half of it.
 	constexpr int CacheLineSize = 64;
-	const EntityId INVALID_ENTITY_ID = -1;
+	constexpr EntityId INVALID_ENTITY_ID = -1;
+
 	class FEntityIdGen {
 		std::mutex Mutex;
 		EntityId NextId = 1;
@@ -30,7 +34,7 @@ namespace de
 		FEntityIdGen(EntityId startId)
 			: NextId(startId) {}
 
-		inline EntityId Gen() {
+		EntityId Gen() {
 			std::lock_guard l(Mutex);
 			return NextId++;
 		}
@@ -39,7 +43,6 @@ namespace de
 #ifdef IMPLEMENT_DOECS
 	FEntityIdGen EntityIdGen;
 #endif
-
 	//
 	// SizeOf
 	//
@@ -116,7 +119,7 @@ namespace de
 		{
 		public:
 			std::tuple<std::array<ComponentTypes, ElementCountPerChunk>...> Components;
-			uint32_t Count = 1;
+			uint32_t Count = 0;
 			Chunk* Next = nullptr;
 
 			void* operator new(std::size_t size)
@@ -182,7 +185,7 @@ namespace de
 		}
 
 		template<typename SystemType, typename ... ComponentTypes>
-		static void RunSystem(SystemType* system, std::tuple<ComponentTypes...>& dummy)
+		static void RunSystem(SystemType* system, std::tuple<ComponentTypes...> dummy)
 		{
 			auto chunk = RootChunk;
 			while (chunk)
@@ -221,10 +224,10 @@ namespace de
 	}
 
 	// struct MovementSystem : public System<PositionComponent>
-	template<typename SystemType>
-	void RunSystem(SystemType* system)
+	template<typename EntityPoolsType, typename SystemType>
+	void RunSystem(EntityPoolsType& entityPools, SystemType* system)
 	{
-		RunSystemImpl(EntityPools, system);
+		RunSystemImpl(entityPools, system);
 	}
 
 
@@ -234,4 +237,4 @@ namespace de
 		return ArchetypePool<ComponentTypes...>::CreateEntity();
 	}
 }
-
+#endif //__doecs_header__
