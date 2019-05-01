@@ -27,21 +27,27 @@ struct FRotationComponent
 	float x, y, z, w;
 };
 
-// Step 2. Declare ArchetypePools for the new entities in a new header files. (e.g. PlayerEntity.h and EnemyEntity.h)
+// Step 2. Declare ArchetypePools for the new entities in new header files. 
+// (e.g. PlayerEntity.h and EnemyEntity.h)
 #define PlayerComponents FPositionComponent, FRotationComponent
 DeclareEntityArchetypePool(FPlayerPool, PlayerComponents);
 
 #define EnemyComponents FPositionComponent
 DeclareEntityArchetypePool(FEnemyPool, EnemyComponents);
 
-// Step 3. Add new EntityArchetypePools to the global tuple for EntityPools in <MyEntitySystem>.h file (e.g. EntitySystem.h)
+// Step 3. Add new EntityArchetypePools to the global tuple for EntityPools 
+// in <MyEntitySystem>.h file (e.g. EntitySystem.h)
 extern std::tuple<FPlayerPool, FEnemyPool> EntityPools;
 
-// Step 4. Also need to add the new pool to the actual tuple implementation in <MyEntitySystem>.cpp file
-// In this cpp file, you must define IMPLEMENT_DOECS macro before including the doecs.h header file so that the required implementation for doecs framework is compiled in this translation unit.
+// Step 4. Also need to add the new pool to the actual tuple implementation 
+// in <MyEntitySystem>.cpp file In this cpp file, you must define IMPLEMENT_DOECS macro 
+// before including the doecs.h header file so that the required implementation 
+// for doecs framework is compiled in this translation unit.
 std::tuple<FPlayerPool, FEnemyPool> EntityPools;
 
-// Step 5. Implement new pools with following codes in each of entity cpp files(e.g. PlayerEntity.cpp and EnemyEntity.cpp) or if you don't want to create new cpp file <MyEntitySystem.cpp> would be a good as well.
+// Step 5. Implement new pools with following codes in each of entity cpp files
+// (e.g. PlayerEntity.cpp and EnemyEntity.cpp) or if you don't want to create 
+// a new cpp file <MyEntitySystem.cpp> would be a good as well.
 ImplementEntityArchetypePool(FPlayerPool);
 ImplementEntityArchetypePool(FEnemyPool);
 
