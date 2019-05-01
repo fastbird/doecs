@@ -15,7 +15,7 @@ For the concrete usage example, see ./Example/ project.
 
 For the Simpler explanation, check the following codes.
 
-```		
+```cpp
 // Step 1. Define components in a new header file. (e.g. Components.h)
 struct FPositionComponent
 {
@@ -40,7 +40,7 @@ DeclareEntityArchetypePool(FEnemyPool, EnemyComponents);
 extern std::tuple<FPlayerPool, FEnemyPool> EntityPools;
 
 // Step 4. Also need to add the new pool to the actual tuple implementation 
-// in <MyEntitySystem>.cpp file In this cpp file, you must define IMPLEMENT_DOECS macro 
+// in <MyEntitySystem>.cpp file. In this cpp file, you must define IMPLEMENT_DOECS macro 
 // before including the doecs.h header file so that the required implementation 
 // for doecs framework is compiled in this translation unit.
 std::tuple<FPlayerPool, FEnemyPool> EntityPools;
