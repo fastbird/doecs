@@ -1,6 +1,6 @@
 #include "EntitySystem.h"
 #include "MovementSystem.h"
-
+#include <assert.h>
 int main()
 {
 	// need to call once per new pool
@@ -16,4 +16,16 @@ int main()
 
 	DestroyEntityArchetypePool(FPlayerPool);
 	DestroyEntityArchetypePool(FEnemyPool);
+
+	// component access
+	FPositionComponent* comp = de::GetComponent<FPositionComponent>(entityId, EntityPools);
+	if (comp)
+	{
+		std::cout << comp->x;
+	}
+
+	FRotationComponent* rotComp = de::GetComponent<FRotationComponent>(entityId2, EntityPools);
+	assert(rotComp == nullptr);
+
+	
 }

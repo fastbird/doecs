@@ -104,6 +104,18 @@ namespace de
 	{
 	};
 
+	template<std::size_t N, typename T, typename... types>
+	struct GetNthType
+	{
+		using type = typename GetNthType<N - 1, types...>::type;
+	};
+
+	template<typename T, typename... types>
+	struct GetNthType<0, T, types...>
+	{
+		using type = T;
+	};
+
 	//
 	// ArchetypePool
 	//
@@ -140,6 +152,12 @@ namespace de
 #else
 				std::free(p);
 #endif
+			}
+
+			template<typename ComponentType>
+			ComponentType* GetComponent(uint32_t index)
+			{
+				return &std::get<std::array<ComponentType, ElementCountPerChunk>>(Components)[index];
 			}
 		};
 		static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
@@ -198,6 +216,24 @@ namespace de
 				chunk = chunk->Next;
 			}			
 		}
+
+		bool HasEntity(EntityId id, void*& chunk, uint32_t& index)
+		{
+			auto it = EntityToComponent.find(id);
+			if (it != EntityToComponent.end())
+			{
+				chunk = it->second.first;
+				index = it->second.second;
+				return true;
+			}
+			return false;
+		}
+
+		template<typename ComponentType>
+		ComponentType* GetComponent(void* chunk, uint32_t index)
+		{
+			return ((Chunk*)chunk)->GetComponent<ComponentType>(index);
+		}
 	};
 
 
@@ -237,5 +273,37 @@ namespace de
 	{
 		return ArchetypePool<ComponentTypes...>::CreateEntity();
 	}
+
+	template<std::size_t I = 0, typename ComponentType, typename ... PoolTypes>
+	inline typename std::enable_if<I == sizeof...(PoolTypes), ComponentType*>::type
+		GetComponentImpl(EntityId entityId, std::tuple<PoolTypes...>& pools)
+	{ 
+		return nullptr;
+	}
+
+	template<std::size_t I = 0, typename ComponentType, typename ... PoolTypes>
+	inline typename std::enable_if < I < sizeof...(PoolTypes), ComponentType*>::type
+		GetComponentImpl(EntityId entityId, std::tuple<PoolTypes...>& pools)
+	{
+		auto& pool = std::get<I>(pools);
+		[[maybe_unused]] void* chunk;
+		[[maybe_unused]] uint32_t index;
+		if constexpr (has_type<ComponentType, std::remove_reference_t<decltype(pool)>::Tuple>::value)
+		{
+			if (pool.HasEntity(entityId, chunk, index))
+			{
+				return pool.GetComponent<ComponentType>(chunk, index);
+			}
+		}
+
+		return GetComponentImpl<I + 1, ComponentType>(entityId, pools);
+	}
+
+	template <typename ComponentType, typename PoolsType>
+	ComponentType* GetComponent(EntityId entityId, PoolsType& entityPools)
+	{
+		return GetComponentImpl<0, ComponentType>(entityId, entityPools);
+	}
+
 }
 #endif //__doecs_header__
