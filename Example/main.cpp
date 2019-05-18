@@ -11,11 +11,7 @@ int main()
 	auto entityId2 = de::CreateEntity<EnemyComponents>();
 
 	MovementSystem* pMoveSystem = new MovementSystem;
-	RunSystem(EntityPools, pMoveSystem);
-	delete pMoveSystem;
-
-	DestroyEntityArchetypePool(FPlayerPool);
-	DestroyEntityArchetypePool(FEnemyPool);
+	RunSystem(pMoveSystem, EntityPools);
 
 	// component access
 	FPositionComponent* comp = de::GetComponent<FPositionComponent>(entityId, EntityPools);
@@ -27,5 +23,10 @@ int main()
 	FRotationComponent* rotComp = de::GetComponent<FRotationComponent>(entityId2, EntityPools);
 	assert(rotComp == nullptr);
 
-	
+	de::RemoveEntity(entityId2, EntityPools);
+
+	delete pMoveSystem;
+
+	DestroyEntityArchetypePool(FPlayerPool);
+	DestroyEntityArchetypePool(FEnemyPool);
 }
