@@ -3,6 +3,7 @@
 #define __doecs_header__
 
 #include <unordered_map>
+#include <vector>
 #include <array>
 #include <cstdlib>
 #include <mutex>
@@ -171,6 +172,8 @@ namespace de
 			static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
 			Chunk* RootChunk;
 			std::unordered_map<EntityId, std::pair<Chunk*, uint32_t> > EntityToComponent;
+			std::vector<EntityId> PendingRemove;
+			std::mutex Mutex;
 
 			static auto& Get()
 			{
@@ -196,6 +199,37 @@ namespace de
 					auto p = next;
 					delete p;
 					next = next->Next;
+				}
+			}
+
+			void Flush()
+			{
+				std::sort(PendingRemove.begin(), PendingRemove.end());
+				PendingRemove.erase(std::unique(PendingRemove.begin(), PendingRemove.end()), PendingRemove.end());
+				while (!PendingRemove.empty()) {
+					auto rit = PendingRemove.rbegin();
+					int consecutiveCount = 1;
+					void* chunk;
+					uint32_t index;
+					auto has = HasEntity(*rit, chunk, index);
+					assert(has);
+					++rit;
+					for ( ; rit != PendingRemove.rend(); ++rit)
+					{
+						void* chunk2;
+						uint32_t index2;
+						has = HasEntity(*rit, chunk2, index2);
+						assert(has);
+						if (chunk == chunk2 && index2 + 1 == index) {
+							++consecutiveCount;
+							index = index2;
+						}
+						else {
+							break;
+						}
+					}
+					PendingRemove.erase(PendingRemove.end() - consecutiveCount, PendingRemove.end());
+					Memmove((Chunk*)chunk, index, consecutiveCount);
 				}
 			}
 
@@ -249,39 +283,46 @@ namespace de
 			}
 
 			template<std::size_t I>
-			void MemmoveRecursive(Chunk* chunk, uint32_t removingIndex)
+			void MemmoveRecursive(Chunk* chunk, uint32_t removingIndex, uint32_t consecutiveCount)
 			{
-				auto numNeedToMove = (chunk->Count - (removingIndex + 1));
+				assert(consecutiveCount >= 1);
+				auto numNeedToMove = (chunk->Count - (removingIndex + consecutiveCount));
 				if (chunk->Count == ElementCountPerChunk) {
 					if (numNeedToMove) {
 						auto& componentArray = std::get<I>(chunk->Components);
 						memmove(&componentArray[removingIndex],
-							&componentArray[removingIndex + 1],
+							&componentArray[removingIndex + consecutiveCount],
 							sizeof(std::remove_reference_t<decltype(componentArray)>::value_type) * numNeedToMove);
 					}
 					if (chunk->Next && chunk->Next->Count > 0) {
 						auto& componentArray = std::get<I>(chunk->Components);
 						auto nextChunk = chunk->Next;
-						auto& nextChunkElement = std::get<I>(nextChunk->Components)[0];
-						componentArray[ElementCountPerChunk - 1] = nextChunkElement;
-						MemmoveRecursive<I>(nextChunk, 0);
+						auto& nextComponentArray = std::get<I>(nextChunk->Components);
+						auto numCopyFromNextChunk = std::min(consecutiveCount, nextChunk->Count);
+						memcpy(&componentArray[ElementCountPerChunk - consecutiveCount],
+							&nextComponentArray[0],
+							sizeof(std::remove_reference_t<decltype(componentArray)>::value_type) * numCopyFromNextChunk);
+						MemmoveRecursive<I>(nextChunk, 0, numCopyFromNextChunk);
 					}
 					else
 					{
-						if constexpr(I == sizeof...(ComponentTypes)-1)
-							--chunk->Count;
+						if constexpr (I == sizeof...(ComponentTypes) - 1) {
+							assert(chunk->Count >= consecutiveCount);
+							chunk->Count -= consecutiveCount;
+						}
 					}
 				}
 				else {
 					if (numNeedToMove) {
 						auto& componentArray = std::get<I>(chunk->Components);
 						memmove(&componentArray[removingIndex],
-							&componentArray[removingIndex + 1],
+							&componentArray[removingIndex + consecutiveCount],
 							sizeof(std::remove_reference_t<decltype(componentArray)>::value_type) * numNeedToMove);
 					}
 					if constexpr (I == sizeof...(ComponentTypes) - 1)
 					{
-						--chunk->Count;
+						assert(chunk->Count >= consecutiveCount);
+						chunk->Count -= consecutiveCount;
 						if (chunk->Next) {
 							chunk->DeleteChunkHierarchy();
 						}
@@ -290,15 +331,15 @@ namespace de
 			}
 
 			template<std::size_t I>
-			std::enable_if_t<I == sizeof...(ComponentTypes)> Memmove(Chunk* chunk, uint32_t removingIndex)
+			std::enable_if_t<I == sizeof...(ComponentTypes)> Memmove(Chunk* chunk, uint32_t removingIndex, uint32_t consecutiveCount)
 			{				
 			}
 
 			template<std::size_t I = 0>
-			std::enable_if_t<I < sizeof...(ComponentTypes)> Memmove(Chunk * chunk, uint32_t removingIndex)
+			std::enable_if_t<I < sizeof...(ComponentTypes)> Memmove(Chunk * chunk, uint32_t removingIndex, uint32_t consecutiveCount)
 			{
-				MemmoveRecursive<I>(chunk, removingIndex);
-				Memmove<I + 1>(chunk, removingIndex);
+				MemmoveRecursive<I>(chunk, removingIndex, consecutiveCount);
+				Memmove<I + 1>(chunk, removingIndex, consecutiveCount);
 			}
 
 			bool RemoveEntity(EntityId id)
@@ -307,7 +348,8 @@ namespace de
 				uint32_t index;
 				if (HasEntity(id, chunk, index))
 				{
-					Memmove((Chunk*)chunk, index);
+					std::lock_guard l(Mutex);
+					PendingRemove.push_back(id);
 					return true;
 				}
 				return false;
@@ -380,30 +422,45 @@ namespace de
 			return GetComponentImpl<I + 1, ComponentType>(entityId, pools);
 		}
 
-		template<std::size_t I, typename ... PoolTypes>
-		std::enable_if_t < I == sizeof...(PoolTypes) > InitializePoolsImpl(std::tuple<PoolTypes...>& pools)
+		struct InitializeFunctor
+		{
+			template<typename PoolType>
+			void operator()(PoolType& pool)
+			{
+				pool.Initialize();
+			}
+		};
+
+		struct DestroyFunctor
+		{
+			template<typename PoolType>
+			void operator()(PoolType& pool)
+			{
+				pool.Destroy();
+			}
+		};
+
+		struct FlushFunctor
+		{
+			template<typename PoolType>
+			void operator()(PoolType& pool)
+			{
+				pool.Flush();
+			}
+		};
+
+
+		template<std::size_t I, typename ... PoolTypes, typename F>
+		std::enable_if_t < I == sizeof...(PoolTypes) > CallFunction(std::tuple<PoolTypes...>& pools, F f)
 		{
 		}
 
-		template<std::size_t I = 0, typename ... PoolTypes>
-		std::enable_if_t < I < sizeof...(PoolTypes) > InitializePoolsImpl(std::tuple<PoolTypes...>& pools)
+		template<std::size_t I = 0, typename ... PoolTypes, typename F>
+		std::enable_if_t < I < sizeof...(PoolTypes) > CallFunction(std::tuple<PoolTypes...>& pools, F f)
 		{
 			auto& pool = std::get<I>(pools);
-			pool.Initialize();
-			InitializePoolsImpl<I + 1>(pools);
-		}
-
-		template<std::size_t I, typename ... PoolTypes>
-		std::enable_if_t < I == sizeof...(PoolTypes) > DestroyPoolsImpl(std::tuple<PoolTypes...>& pools)
-		{
-		}
-
-		template<std::size_t I = 0, typename ... PoolTypes>
-		std::enable_if_t < I < sizeof...(PoolTypes) > DestroyPoolsImpl(std::tuple<PoolTypes...>& pools)
-		{
-			auto& pool = std::get<I>(pools);
-			pool.Destroy();
-			DestroyPoolsImpl<I + 1>(pools);
+			f(pool);
+			CallFunction<I + 1>(pools, f);
 		}
 	}
 	
@@ -416,13 +473,19 @@ namespace de
 	template<typename ... PoolTypes>
 	void InitializePools(std::tuple<PoolTypes...>& pools)
 	{
-		impl::InitializePoolsImpl(pools);
+		impl::CallFunction(pools, impl::InitializeFunctor());
 	}
 
 	template<typename ... PoolTypes>
 	void DestroyPools(std::tuple<PoolTypes...>& pools)
 	{
-		impl::DestroyPoolsImpl(pools);
+		impl::CallFunction(pools, impl::DestroyFunctor());
+	}
+
+	template<typename ... PoolTypes>
+	void FlushPools(std::tuple<PoolTypes...>& pools)
+	{
+		impl::CallFunction(pools, impl::FlushFunctor());
 	}
 
 	template<typename ... ComponentTypes>

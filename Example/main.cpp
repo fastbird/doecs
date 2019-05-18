@@ -22,6 +22,7 @@ int main()
 	assert(rotComp == nullptr);
 
 	de::RemoveEntity(entityId2, EntityPools);
+	de::FlushPools(EntityPools);
 
 	delete pMoveSystem;
 
