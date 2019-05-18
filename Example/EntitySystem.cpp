@@ -2,6 +2,4 @@
 
 #include "EntitySystem.h"
 
-std::tuple<FPlayerPool, FEnemyPool> EntityPools;
-ImplementEntityArchetypePool(FPlayerPool);
-ImplementEntityArchetypePool(FEnemyPool);
+std::tuple<FPlayerPool&, FEnemyPool&> EntityPools = { FPlayerPool::Get(), FEnemyPool::Get() };

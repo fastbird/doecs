@@ -6,15 +6,12 @@
 #include <array>
 #include <cstdlib>
 #include <mutex>
+#include <assert.h>
 
 // Create a cpp file and define IMPLEMENT_DOECS then include this header file.
 //#define IMPLEMENT_DOECS 1
 
 #define DeclareEntityArchetypePool(PoolName, ...) using PoolName = de::impl::ArchetypePool<__VA_ARGS__>
-#define ImplementEntityArchetypePool(PoolName) PoolName::Chunk* PoolName::RootChunk = nullptr;\
-	std::unordered_map<de::EntityId, std::pair<PoolName::Chunk*, uint32_t> > PoolName::EntityToComponent
-#define InitializeEntityArchetypePool(PoolName) PoolName::Initialize()
-#define DestroyEntityArchetypePool(PoolName) PoolName::Destroy();
 
 // de stands for Do Ecs
 namespace de
@@ -172,18 +169,28 @@ namespace de
 			};
 
 			static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
-			static Chunk* RootChunk;
-			static std::unordered_map<EntityId, std::pair<Chunk*, uint32_t> > EntityToComponent;
+			Chunk* RootChunk;
+			std::unordered_map<EntityId, std::pair<Chunk*, uint32_t> > EntityToComponent;
 
-			static void Initialize()
+			static auto& Get()
 			{
+				static ArchetypePool<ComponentTypes...> Instance;
+				return Instance;
+			}
+
+			void Initialize()
+			{
+				assert(!RootChunk);
 				RootChunk = new Chunk;
 			}
 
-			static void Destroy()
+			void Destroy()
 			{
+				if (!RootChunk)
+					return;
 				auto next = RootChunk->Next;
 				delete RootChunk;
+				RootChunk = nullptr;
 				while (next)
 				{
 					auto p = next;
@@ -191,7 +198,8 @@ namespace de
 					next = next->Next;
 				}
 			}
-			static EntityId CreateEntity()
+
+			EntityId CreateEntity()
 			{
 				static_assert(ElementCountPerChunk > 50, "Entity is too big");
 				auto entityId = EntityIdGen.Gen();
@@ -215,7 +223,7 @@ namespace de
 			}
 
 			template<typename SystemType, typename ... ComponentTypes>
-			static void RunSystem(SystemType* system, std::tuple<ComponentTypes...> dummy)
+			void RunSystem(SystemType* system, std::tuple<ComponentTypes...> dummy)
 			{
 				auto chunk = RootChunk;
 				while (chunk)
@@ -371,6 +379,32 @@ namespace de
 
 			return GetComponentImpl<I + 1, ComponentType>(entityId, pools);
 		}
+
+		template<std::size_t I, typename ... PoolTypes>
+		std::enable_if_t < I == sizeof...(PoolTypes) > InitializePoolsImpl(std::tuple<PoolTypes...>& pools)
+		{
+		}
+
+		template<std::size_t I = 0, typename ... PoolTypes>
+		std::enable_if_t < I < sizeof...(PoolTypes) > InitializePoolsImpl(std::tuple<PoolTypes...>& pools)
+		{
+			auto& pool = std::get<I>(pools);
+			pool.Initialize();
+			InitializePoolsImpl<I + 1>(pools);
+		}
+
+		template<std::size_t I, typename ... PoolTypes>
+		std::enable_if_t < I == sizeof...(PoolTypes) > DestroyPoolsImpl(std::tuple<PoolTypes...>& pools)
+		{
+		}
+
+		template<std::size_t I = 0, typename ... PoolTypes>
+		std::enable_if_t < I < sizeof...(PoolTypes) > DestroyPoolsImpl(std::tuple<PoolTypes...>& pools)
+		{
+			auto& pool = std::get<I>(pools);
+			pool.Destroy();
+			DestroyPoolsImpl<I + 1>(pools);
+		}
 	}
 	
 	template<typename ... ComponentTypes>
@@ -379,10 +413,22 @@ namespace de
 		using Tuple = std::tuple<ComponentTypes...>;
 	};
 
+	template<typename ... PoolTypes>
+	void InitializePools(std::tuple<PoolTypes...>& pools)
+	{
+		impl::InitializePoolsImpl(pools);
+	}
+
+	template<typename ... PoolTypes>
+	void DestroyPools(std::tuple<PoolTypes...>& pools)
+	{
+		impl::DestroyPoolsImpl(pools);
+	}
+
 	template<typename ... ComponentTypes>
 	EntityId CreateEntity()
 	{
-		return impl::ArchetypePool<ComponentTypes...>::CreateEntity();
+		return impl::ArchetypePool<ComponentTypes...>::Get().CreateEntity();
 	}
 
 	template <typename EntityPoolsType>
@@ -402,6 +448,5 @@ namespace de
 	{
 		return impl::GetComponentImpl<0, ComponentType>(entityId, entityPools);
 	}
-
 }
 #endif //__doecs_header__

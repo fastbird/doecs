@@ -3,9 +3,7 @@
 #include <assert.h>
 int main()
 {
-	// need to call once per new pool
-	InitializeEntityArchetypePool(FPlayerPool);
-	InitializeEntityArchetypePool(FEnemyPool);
+	de::InitializePools(EntityPools);
 
 	auto entityId = de::CreateEntity<PlayerComponents>();
 	auto entityId2 = de::CreateEntity<EnemyComponents>();
@@ -27,6 +25,5 @@ int main()
 
 	delete pMoveSystem;
 
-	DestroyEntityArchetypePool(FPlayerPool);
-	DestroyEntityArchetypePool(FEnemyPool);
+	de::DestroyPools(EntityPools);
 }
