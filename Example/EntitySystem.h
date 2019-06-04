@@ -1,7 +1,7 @@
 #pragma once
 #include "../doecs.h"
 #include "PlayerEntity.h"
-#include "EnemyEntity.h"
-extern std::tuple<FPlayerPool&, FEnemyPool&> EntityPools;
+#include "WeaponEntity.h"
+extern std::tuple<FPlayerPool&, FWeaponPool&> EntityPools;
 
 

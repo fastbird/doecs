@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Entiies">
+      <UniqueIdentifier>{114303dd-0b1e-49ce-bef4-bba8d39b0d5c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -21,21 +24,30 @@
     <ClCompile Include="EntitySystem.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="..\doecs2.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Components.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
-    <ClInclude Include="PlayerEntity.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
-    <ClInclude Include="EnemyEntity.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
     <ClInclude Include="EntitySystem.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="MovementSystem.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="..\doecs.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="WeaponEntity.h">
+      <Filter>Entiies</Filter>
+    </ClInclude>
+    <ClInclude Include="PlayerEntity.h">
+      <Filter>Entiies</Filter>
+    </ClInclude>
+    <ClInclude Include="Components.h">
+      <Filter>Entiies</Filter>
+    </ClInclude>
+    <ClInclude Include="..\doecs2.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
   </ItemGroup>

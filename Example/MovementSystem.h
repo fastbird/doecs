@@ -5,9 +5,11 @@
 
 struct MovementSystem : public de::System<FPositionComponent>
 {
-	void Execute(FPositionComponent& pos)
+	void Execute(uint32_t count, FPositionComponent* positions)
 	{
-		// move it
-		std::cout << "move " << &pos << std::endl;
+		for (uint32_t i = 0; i < count; ++i) {
+			// move it
+			std::cout << "move " << &positions[i] << std::endl;
+		}
 	}
 };

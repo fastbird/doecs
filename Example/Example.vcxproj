@@ -124,12 +124,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\doecs2.cpp" />
     <ClCompile Include="EntitySystem.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\doecs.h" />
+    <ClInclude Include="..\doecs2.h" />
     <ClInclude Include="Components.h" />
-    <ClInclude Include="EnemyEntity.h" />
+    <ClInclude Include="WeaponEntity.h" />
     <ClInclude Include="EntitySystem.h" />
     <ClInclude Include="MovementSystem.h" />
     <ClInclude Include="PlayerEntity.h" />

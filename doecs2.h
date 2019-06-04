@@ -1,24 +1,15 @@
 #pragma once
-#ifndef __doecs_header__
-#define __doecs_header__
-
-#include "doecs_type.h"
-#include <unordered_map>
+#include <cstddef>
 #include <vector>
-#include <array>
-#include <cstdlib>
+#include <unordered_map>
 #include <mutex>
 #include <assert.h>
 
-// Create a cpp file and define IMPLEMENT_DOECS then include this header file.
-//#define IMPLEMENT_DOECS 1
-
-#define DeclareEntityArchetypePool(PoolName, ...) using PoolName = de::impl::ArchetypePool<__VA_ARGS__>
-
-// de stands for Do Ecs
-namespace de
+#include "doecs_type.h"
+namespace de2
 {
-	namespace impl {
+	namespace impl
+	{
 		constexpr int ChunkSize = 16 * 1024; // Usually CPU has 32 kb L1 cache and I decide to use half of it.
 		constexpr int CacheLineSize = 64;
 		class FEntityIdGen {
@@ -36,9 +27,19 @@ namespace de
 			}
 		};
 		extern FEntityIdGen EntityIdGen;
-#ifdef IMPLEMENT_DOECS
-		FEntityIdGen EntityIdGen;
-#endif
+
+		template <class T>
+		uint64_t hash_combine(uint64_t& seed, const T& v)
+		{
+			std::hash<T> hasher;
+			const uint64_t kMul = 0x9ddfea08eb382d69ULL;
+			uint64_t a = (hasher(v) ^ seed) * kMul;
+			a ^= (a >> 47);
+			uint64_t b = (seed ^ a) * kMul;
+			b ^= (b >> 47);
+			seed = b * kMul;
+			return seed;
+		}
 
 		//
 		// SizeOf
@@ -58,67 +59,18 @@ namespace de
 			static const auto Value = (sizeof(TFirst) + SizeOf<TRemaining...>::Value);
 		};
 
-		//
-		// has_type
-		//
-		template <typename T, typename Tuple>
-		struct has_type;
-
-		template <typename T, typename... Us>
-		struct has_type<T, std::tuple<Us...>> : std::disjunction<std::is_same<T, Us>...> {};
-
-		//
-		// intersection
-		//
-		template <typename S1, typename S2>
-		struct intersect
+		class IArchetypePool
 		{
-			template <std::size_t... Indices>
-			static constexpr auto make_intersection(std::index_sequence<Indices...>) {
-
-				return std::tuple_cat(
-					std::conditional_t<
-					has_type<std::tuple_element_t<Indices, S1>, S2>::value,
-					std::tuple<std::tuple_element_t<Indices, S1>>,
-					std::tuple<>
-					>{}...);
-			}
-			using type = decltype(make_intersection(std::make_index_sequence<std::tuple_size<S1>::value>{}));
+		public:
+			virtual bool IsPoolFor(uint64_t componentHash) = 0;
+			virtual EntityId CreateEntity() = 0;
 		};
 
-		template<typename SubType, typename CheckingType, typename = void>
-		struct has_all_type;
-
-		template<typename SubType, typename CheckingType>
-		struct has_all_type<SubType, CheckingType, std::enable_if_t< std::is_same_v<typename intersect<SubType, CheckingType>::type, SubType>>>
-			: std::true_type
-		{
-		};
-
-		template<typename SubType, typename CheckingType>
-		struct has_all_type<SubType, CheckingType, std::enable_if_t< !std::is_same_v<typename intersect<SubType, CheckingType>::type, SubType>>>
-			: std::false_type
-		{
-		};
-
-		template<std::size_t N, typename T, typename... types>
-		struct GetNthType
-		{
-			using type = typename GetNthType<N - 1, types...>::type;
-		};
-
-		template<typename T, typename... types>
-		struct GetNthType<0, T, types...>
-		{
-			using type = T;
-		};
-
-		//
-	// ArchetypePool
-	//
 		template<typename ... ComponentTypes>
-		class ArchetypePool
+		class ArchetypePool : public IArchetypePool
 		{
+			uint64_t Hash;
+
 		public:
 			using Tuple = std::tuple<ComponentTypes...>;
 			static constexpr uint32_t EntitySize = SizeOf<ComponentTypes...>::Value;
@@ -174,19 +126,14 @@ namespace de
 			std::vector<EntityId> PendingRemove;
 			std::mutex Mutex;
 
-			static auto& Get()
+		public:
+			ArchetypePool(uint64_t hash)
+				: Hash(hash)
 			{
-				static ArchetypePool<ComponentTypes...> Instance;
-				return Instance;
-			}
-
-			void Initialize()
-			{
-				assert(!RootChunk);
 				RootChunk = new Chunk;
 			}
 
-			void Destroy()
+			~ArchetypePool()
 			{
 				if (!RootChunk)
 					return;
@@ -201,6 +148,11 @@ namespace de
 				}
 			}
 
+			bool IsPoolFor(uint64_t componentHash) override
+			{
+				return Hash == componentHash;
+			}
+
 			void Flush()
 			{
 				std::sort(PendingRemove.begin(), PendingRemove.end());
@@ -213,7 +165,7 @@ namespace de
 					auto has = HasEntity(*rit, chunk, index);
 					assert(has);
 					++rit;
-					for ( ; rit != PendingRemove.rend(); ++rit)
+					for (; rit != PendingRemove.rend(); ++rit)
 					{
 						void* chunk2;
 						uint32_t index2;
@@ -232,7 +184,7 @@ namespace de
 				}
 			}
 
-			EntityId CreateEntity()
+			EntityId CreateEntity() override
 			{
 				static_assert(ElementCountPerChunk > 50, "Entity is too big");
 				auto entityId = EntityIdGen.Gen();
@@ -328,11 +280,11 @@ namespace de
 
 			template<std::size_t I>
 			std::enable_if_t<I == sizeof...(ComponentTypes)> Memmove(Chunk* chunk, uint32_t removingIndex, uint32_t consecutiveCount)
-			{				
+			{
 			}
 
 			template<std::size_t I = 0>
-			std::enable_if_t<I < sizeof...(ComponentTypes)> Memmove(Chunk * chunk, uint32_t removingIndex, uint32_t consecutiveCount)
+			std::enable_if_t < I < sizeof...(ComponentTypes)> Memmove(Chunk * chunk, uint32_t removingIndex, uint32_t consecutiveCount)
 			{
 				MemmoveRecursive<I>(chunk, removingIndex, consecutiveCount);
 				Memmove<I + 1>(chunk, removingIndex, consecutiveCount);
@@ -356,156 +308,49 @@ namespace de
 			{
 				return ((Chunk*)chunk)->GetComponent<ComponentType>(index);
 			}
+
 		};
 
-		template<std::size_t I, typename SystemType, typename... Tp>
-		typename std::enable_if_t<I == sizeof...(Tp)> RunSystemImpl(SystemType* system, std::tuple<Tp...>& pools)
-		{ }
-
-
-		template<std::size_t I = 0, typename SystemType, typename... Tp>
-		typename std::enable_if_t < I < sizeof...(Tp)> RunSystemImpl(SystemType* system, std::tuple<Tp...>& pools)
+		template<std::size_t I = 0, typename ... ComponentTypes>
+		void ComponentsHash(uint64_t & hash)
 		{
-			auto& pool = std::get<I>(pools);
-			if constexpr (has_all_type<SystemType::Tuple, std::remove_reference<decltype(pool)>::type::Tuple>::value)
-			{
-				pool.RunSystem(system, SystemType::Tuple{});
+			hash_combine(hash, typeid(std::tuple_element_t<I, std::tuple<ComponentTypes...>>).hash_code());
+			if constexpr (I + 1 < sizeof...(ComponentTypes)) {
+				ComponentsHash<I + 1, ComponentTypes...>(hash);
 			}
-
-			RunSystemImpl<I + 1>(system, pools);
-		}
-
-		template<std::size_t I = 0, typename ... PoolTypes>
-		inline typename std::enable_if<I == sizeof...(PoolTypes)>::type
-			RemoveEntityImpl(EntityId entityId, std::tuple<PoolTypes...>& pools)
-		{
-			return;
-		}
-
-		template<std::size_t I = 0, typename ... PoolTypes>
-		inline typename std::enable_if < I < sizeof...(PoolTypes)>::type
-			RemoveEntityImpl(EntityId entityId, std::tuple<PoolTypes...>& pools)
-		{
-			auto& pool = std::get<I>(pools);
-			if (pool.RemoveEntity(entityId))
-				return;
-
-			RemoveEntityImpl<I + 1>(entityId, pools);
-		}
-
-		template<std::size_t I = 0, typename ComponentType, typename ... PoolTypes>
-		inline typename std::enable_if<I == sizeof...(PoolTypes), ComponentType*>::type
-			GetComponentImpl(EntityId entityId, std::tuple<PoolTypes...>& pools)
-		{
-			return nullptr;
-		}
-
-		template<std::size_t I = 0, typename ComponentType, typename ... PoolTypes>
-		inline typename std::enable_if < I < sizeof...(PoolTypes), ComponentType*>::type
-			GetComponentImpl(EntityId entityId, std::tuple<PoolTypes...>& pools)
-		{
-			auto& pool = std::get<I>(pools);
-			[[maybe_unused]] void* chunk;
-			[[maybe_unused]] uint32_t index;
-			if constexpr (has_type<ComponentType, std::remove_reference_t<decltype(pool)>::Tuple>::value)
-			{
-				if (pool.HasEntity(entityId, chunk, index))
-				{
-					return pool.GetComponent<ComponentType>(chunk, index);
-				}
-			}
-
-			return GetComponentImpl<I + 1, ComponentType>(entityId, pools);
-		}
-
-		struct InitializeFunctor
-		{
-			template<typename PoolType>
-			void operator()(PoolType& pool)
-			{
-				pool.Initialize();
-			}
-		};
-
-		struct DestroyFunctor
-		{
-			template<typename PoolType>
-			void operator()(PoolType& pool)
-			{
-				pool.Destroy();
-			}
-		};
-
-		struct FlushFunctor
-		{
-			template<typename PoolType>
-			void operator()(PoolType& pool)
-			{
-				pool.Flush();
-			}
-		};
-
-
-		template<std::size_t I, typename ... PoolTypes, typename F>
-		std::enable_if_t < I == sizeof...(PoolTypes) > CallFunction(std::tuple<PoolTypes...>& pools, F f)
-		{
-		}
-
-		template<std::size_t I = 0, typename ... PoolTypes, typename F>
-		std::enable_if_t < I < sizeof...(PoolTypes) > CallFunction(std::tuple<PoolTypes...>& pools, F f)
-		{
-			auto& pool = std::get<I>(pools);
-			f(pool);
-			CallFunction<I + 1>(pools, f);
 		}
 	}
-	
-	template<typename ... ComponentTypes>
-	struct System
+
+	class DOECS
 	{
-		using Tuple = std::tuple<ComponentTypes...>;
+		std::unordered_map<uint64_t, impl::IArchetypePool*> Pools;
+	public:
+
+		~DOECS();
+
+		template<typename ... ComponentTypes>
+		void AddPool()
+		{
+			uint64_t hash = 0;
+			impl::ComponentsHash<0, ComponentTypes...>(hash);
+			Pools.insert({hash, new impl::ArchetypePool<ComponentTypes...>(hash)});
+		}
+
+		template<typename ... ComponentTypes>
+		EntityId CreateEntity()
+		{
+			uint64_t poolHash = 0;
+			impl::ComponentsHash<0, ComponentTypes...>(poolHash);
+			return CreateEntity(poolHash);
+		}
+
+		EntityId CreateEntity(uint64_t poolHash)
+		{
+			auto it = Pools.find(poolHash);
+			if (it == Pools.end()) {
+				return INVALID_ENTITY_ID;
+			}
+			return it->second->CreateEntity();
+		}
 	};
-
-	template<typename ... PoolTypes>
-	void InitializePools(std::tuple<PoolTypes...>& pools)
-	{
-		impl::CallFunction(pools, impl::InitializeFunctor());
-	}
-
-	template<typename ... PoolTypes>
-	void DestroyPools(std::tuple<PoolTypes...>& pools)
-	{
-		impl::CallFunction(pools, impl::DestroyFunctor());
-	}
-
-	template<typename ... PoolTypes>
-	void FlushPools(std::tuple<PoolTypes...>& pools)
-	{
-		impl::CallFunction(pools, impl::FlushFunctor());
-	}
-
-	template<typename ... ComponentTypes>
-	EntityId CreateEntity()
-	{
-		return impl::ArchetypePool<ComponentTypes...>::Get().CreateEntity();
-	}
-
-	template <typename EntityPoolsType>
-	void RemoveEntity(EntityId entityId, EntityPoolsType& entityPools)
-	{
-		impl::RemoveEntityImpl<0>(entityId, entityPools);
-	}
-
-	template<typename SystemType, typename EntityPoolsType>
-	void RunSystem(SystemType* system, EntityPoolsType& entityPools)
-	{
-		impl::RunSystemImpl(system, entityPools);
-	}
-	
-	template <typename ComponentType, typename EntityPoolsType>
-	ComponentType* GetComponent(EntityId entityId, EntityPoolsType& entityPools)
-	{
-		return impl::GetComponentImpl<0, ComponentType>(entityId, entityPools);
-	}
 }
-#endif //__doecs_header__

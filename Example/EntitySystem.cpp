@@ -2,4 +2,4 @@
 
 #include "EntitySystem.h"
 
-std::tuple<FPlayerPool&, FEnemyPool&> EntityPools = { FPlayerPool::Get(), FEnemyPool::Get() };
+std::tuple<FPlayerPool&, FWeaponPool&> EntityPools = { FPlayerPool::Get(), FWeaponPool::Get() };
