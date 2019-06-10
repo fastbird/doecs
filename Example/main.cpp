@@ -1,6 +1,7 @@
 #include "EntitySystem.h"
 #include "../doecs2.h"
 #include "MovementSystem.h"
+#include "Events.h"
 #include <assert.h>
 
 int main()
@@ -8,6 +9,17 @@ int main()
 	de2::DOECS ecs;
 	ecs.AddPool<PlayerComponents>();
 	auto entity = ecs.CreateEntity< PlayerComponents>();
+	ecs.RunSystems();
+	KnockBackEvent* evt = new KnockBackEvent(10, 10, 10);
+	ecs.PushEvent(entity, evt);
+	ecs.RunEvents();
+
+	
+}
+
+// old  system
+void TestECS1()
+{
 	de::InitializePools(EntityPools);
 
 	auto entityId = de::CreateEntity<PlayerComponents>();

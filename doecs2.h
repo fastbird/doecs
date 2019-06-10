@@ -4,13 +4,37 @@
 #include <unordered_map>
 #include <mutex>
 #include <assert.h>
+#include <algorithm>
 
 #include "doecs_type.h"
 namespace de2
 {
+	class DOECS;
+	class ISystem
+	{
+	public:
+		volatile bool Done = false;
+
+		virtual std::size_t GetComponentHashes(const uint64_t*& pHashes) = 0;
+		virtual void Execute(uint32_t elementCount, const de2::ComponentsArg& components) = 0;
+	};
+
+	class IEvent
+	{
+	public:
+		virtual std::size_t GetComponentHashes(const uint64_t*& pHashes) = 0;
+		virtual void Execute(const de2::ComponentsArg& components) = 0;
+	};
+
+	template<std::size_t N, typename T>
+	constexpr size_t ArrayCount(const T(&arr)[N])
+	{
+		return N;
+	}
+
 	namespace impl
 	{
-		constexpr int ChunkSize = 16 * 1024; // Usually CPU has 32 kb L1 cache and I decide to use half of it.
+		constexpr int ChunkSize = 16 * 1024; // Usually CPU has 32 kb L1 cache including instruction and data cache.
 		constexpr int CacheLineSize = 64;
 		class FEntityIdGen {
 			std::mutex Mutex;
@@ -63,13 +87,18 @@ namespace de2
 		{
 		public:
 			virtual bool IsPoolFor(uint64_t componentHash) = 0;
+			virtual bool IsPoolFor(ISystem* system) = 0;
 			virtual EntityId CreateEntity() = 0;
+			virtual uint32_t GetComponents(uint32_t chunkIndex, uint64_t hash, void*& components) = 0;
+			virtual void PushEvent(EntityId entId, IEvent* evt) = 0;
+			virtual void RunEvents() = 0;
 		};
 
 		template<typename ... ComponentTypes>
 		class ArchetypePool : public IArchetypePool
 		{
 			uint64_t Hash;
+			std::vector<uint64_t> ComponentHashes;
 
 		public:
 			using Tuple = std::tuple<ComponentTypes...>;
@@ -110,6 +139,41 @@ namespace de2
 					return &std::get<std::array<ComponentType, ElementCountPerChunk>>(Components)[index];
 				}
 
+				template<std::size_t I>
+				std::enable_if_t<I == sizeof...(ComponentTypes), uint32_t> GetComponents(uint32_t componentTupleIndex, void*& components)
+				{
+					return 0;
+				}
+
+				template<std::size_t I = 0>
+				std::enable_if_t < I < sizeof...(ComponentTypes), uint32_t> GetComponents(uint32_t componentTupleIndex, void*& components)
+				{
+					if (I == componentTupleIndex) {
+						components = &std::get<I>(Components)[0];
+						return Count;
+					}
+					else {
+						return GetComponents<I + 1>(componentTupleIndex, components);
+					}
+				}
+
+				template<std::size_t I>
+				std::enable_if_t<I == sizeof...(ComponentTypes), void*> GetComponent(uint32_t componentTupleIndex, uint32_t entityIndex)
+				{
+					return nullptr;
+				}
+
+				template<std::size_t I = 0>
+				std::enable_if_t < I < sizeof...(ComponentTypes), void*> GetComponent(uint32_t componentTupleIndex, uint32_t entityIndex)
+				{
+					if (I == componentTupleIndex) {
+						return &std::get<I>(Components)[entityIndex];
+					}
+					else {
+						return GetComponent<I + 1>(componentTupleIndex, entityIndex);
+					}
+				}
+
 				void DeleteChunkHierarchy()
 				{
 					if (!Next)
@@ -123,12 +187,14 @@ namespace de2
 			static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
 			Chunk* RootChunk;
 			std::unordered_map<EntityId, std::pair<Chunk*, uint32_t> > EntityToComponent;
+			std::unordered_map<EntityId, std::vector<IEvent*>> Events;
 			std::vector<EntityId> PendingRemove;
 			std::mutex Mutex;
 
 		public:
-			ArchetypePool(uint64_t hash)
+			ArchetypePool(uint64_t hash, std::vector<uint64_t>&& componentHashes)
 				: Hash(hash)
+				, ComponentHashes(componentHashes)
 			{
 				RootChunk = new Chunk;
 			}
@@ -151,6 +217,18 @@ namespace de2
 			bool IsPoolFor(uint64_t componentHash) override
 			{
 				return Hash == componentHash;
+			}
+
+			bool IsPoolFor(ISystem* system) override
+			{
+				const uint64_t* systemComponents;
+				auto count = system->GetComponentHashes(systemComponents);
+				bool contains = true;
+				for (std::size_t i = 0; i < count; ++i) {
+					if (std::find(ComponentHashes.begin(), ComponentHashes.end(), systemComponents[i]) == ComponentHashes.end())
+						return false;
+				}
+				return true;
 			}
 
 			void Flush()
@@ -207,15 +285,38 @@ namespace de2
 				return INVALID_ENTITY_ID;
 			}
 
-			template<typename SystemType, typename ... ComponentTypes>
-			void RunSystem(SystemType* system, std::tuple<ComponentTypes...> dummy)
+			uint32_t GetComponents(uint32_t chunkIndex, uint64_t hash, void*& components) override
 			{
 				auto chunk = RootChunk;
-				while (chunk)
-				{
-					system->Execute(chunk->Count, &std::get< std::array<ComponentTypes, ElementCountPerChunk>>(chunk->Components)[0]...);
+				while (chunkIndex > 0) {
+					--chunkIndex;
+					if (!chunk->Next)
+						return 0;
 					chunk = chunk->Next;
 				}
+				if (!chunk)
+					return 0;
+
+				auto it = std::find(ComponentHashes.begin(), ComponentHashes.end(), hash);
+				if (it == ComponentHashes.end())
+					return 0;
+
+				return chunk->GetComponents(std::distance(ComponentHashes.begin(), it), components);
+			}
+
+			void* GetComponent(void* chunk, uint64_t componentHash, uint32_t index)
+			{
+				auto it = std::find(ComponentHashes.begin(), ComponentHashes.end(), componentHash);
+				if (it == ComponentHashes.end())
+					return 0;
+
+				return ((Chunk*)chunk)->GetComponent(std::distance(ComponentHashes.begin(), it), index);
+			}
+
+			template<typename ComponentType>
+			ComponentType* GetComponent(void* chunk, uint32_t index)
+			{
+				return ((Chunk*)chunk)->GetComponent<ComponentType>(index);
 			}
 
 			bool HasEntity(EntityId id, void*& chunk, uint32_t& index)
@@ -279,7 +380,7 @@ namespace de2
 			}
 
 			template<std::size_t I>
-			std::enable_if_t<I == sizeof...(ComponentTypes)> Memmove(Chunk* chunk, uint32_t removingIndex, uint32_t consecutiveCount)
+			std::enable_if_t<I == sizeof...(ComponentTypes)> Memmove(Chunk * chunk, uint32_t removingIndex, uint32_t consecutiveCount)
 			{
 			}
 
@@ -303,12 +404,39 @@ namespace de2
 				return false;
 			}
 
-			template<typename ComponentType>
-			ComponentType* GetComponent(void* chunk, uint32_t index)
+			void PushEvent(EntityId entId, IEvent* evt) override
 			{
-				return ((Chunk*)chunk)->GetComponent<ComponentType>(index);
+				Events[entId].push_back(evt);
 			}
 
+			void RunEvents() override
+			{
+				for (auto& it : Events) {
+					void* chunk;
+					uint32_t index;
+					if (HasEntity(it.first, chunk, index)){
+						for (auto& evt : it.second) {
+							const uint64_t* componentHashes = nullptr;
+							auto count = evt->GetComponentHashes(componentHashes);
+							ComponentsArg components;
+							for (size_t i = 0; i < count; ++i)
+							{
+								auto pComponent = GetComponent(chunk, componentHashes[i], index);
+								assert(pComponent);
+								components.push_back(pComponent);
+							}
+							evt->Execute(components);
+							delete evt;
+						}
+					}
+					else {
+						for (auto& evt : it.second) {
+							delete evt;
+						}
+					}
+				}
+				Events.clear();
+			}
 		};
 
 		template<std::size_t I = 0, typename ... ComponentTypes>
@@ -324,6 +452,9 @@ namespace de2
 	class DOECS
 	{
 		std::unordered_map<uint64_t, impl::IArchetypePool*> Pools;
+		std::unordered_map<EntityId, uint64_t> EntityPoolMap;
+		std::vector<ISystem*> Systems;
+		std::unordered_map<ISystem*, std::vector<ISystem*>> SystemDependencies;
 	public:
 
 		~DOECS();
@@ -333,7 +464,17 @@ namespace de2
 		{
 			uint64_t hash = 0;
 			impl::ComponentsHash<0, ComponentTypes...>(hash);
-			Pools.insert({hash, new impl::ArchetypePool<ComponentTypes...>(hash)});
+			Pools.insert({ hash, new impl::ArchetypePool<ComponentTypes...>(hash, { typeid(ComponentTypes).hash_code()... }) });
+		}
+
+		void AddSystem(ISystem* system)
+		{
+			Systems.push_back(system);
+		}
+
+		void RemoveSystem(ISystem* system)
+		{
+			Systems.erase(std::remove(Systems.begin(), Systems.end(), system), Systems.end());
 		}
 
 		template<typename ... ComponentTypes>
@@ -350,7 +491,79 @@ namespace de2
 			if (it == Pools.end()) {
 				return INVALID_ENTITY_ID;
 			}
-			return it->second->CreateEntity();
+			auto entityId = it->second->CreateEntity();
+			EntityPoolMap[entityId] = poolHash;
+			return entityId;
+		}
+
+		void RunSystem(ISystem* system)
+		{
+			const uint64_t* componentHashes = nullptr;
+			std::size_t componentCount = system->GetComponentHashes(componentHashes);
+			for (auto& pool : Pools)
+			{
+				if (pool.second->IsPoolFor(system))
+				{
+					int chunkIndex = 0;
+					bool checkNextChunk = true;
+					// loop over chunks;
+					while (checkNextChunk) {
+						ComponentsArg requiredComponents;
+						// loop over required components;
+						uint32_t count = 0;
+						for (uint32_t c = 0; c < componentCount; ++c) {
+							void* components = nullptr;
+							uint32_t count_ = pool.second->GetComponents(chunkIndex, componentHashes[c], components);
+
+							if (count == 0 || components == nullptr) {
+								checkNextChunk = false;
+								break;
+							}
+							assert(count == 0 || count == count_);
+							count = count_;
+							requiredComponents.push_back(components);
+						}
+						system->Execute(count, requiredComponents);
+						++chunkIndex;
+					}
+				}
+			}
+		}
+
+		void RunSystems()
+		{
+			for (auto system : Systems) {
+				system->Done = false;
+			}
+
+			for (auto system : Systems) {
+				RunSystem(system);
+			}
+		}
+
+		bool PushEvent(EntityId entId, IEvent* evt)
+		{
+			impl::IArchetypePool* pool = GetPoolForEntity(entId);
+			if (!pool)
+				return false;
+			pool->PushEvent(entId, evt);
+			return true;
+		}
+
+		void RunEvents()
+		{
+			for (auto& pool : Pools) {
+				pool.second->RunEvents();
+			}
+		}
+
+	private:
+		impl::IArchetypePool* GetPoolForEntity(EntityId entId) {
+			auto it = EntityPoolMap.find(entId);
+			if (it != EntityPoolMap.end()) {
+				Pools.find(it->second)->second;
+			}
+			return nullptr;
 		}
 	};
 }
