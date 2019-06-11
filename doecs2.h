@@ -90,6 +90,7 @@ namespace de2
 			virtual bool IsPoolFor(ISystem* system) = 0;
 			virtual EntityId CreateEntity() = 0;
 			virtual uint32_t GetComponents(uint32_t chunkIndex, uint64_t hash, void*& components) = 0;
+			virtual void* GetComponent(EntityId entity, uint64_t componentHash) = 0;
 			virtual void PushEvent(EntityId entId, IEvent* evt) = 0;
 			virtual void RunEvents() = 0;
 		};
@@ -304,6 +305,17 @@ namespace de2
 				return chunk->GetComponents(std::distance(ComponentHashes.begin(), it), components);
 			}
 
+			void* GetComponent(EntityId entity, uint64_t componentHash) override
+			{
+				void* chunk;
+				uint32_t index;
+				if (HasEntity(entity, chunk, index))
+				{
+					return GetComponent(chunk, componentHash, index)
+				}
+				return nullptr;
+			}
+
 			void* GetComponent(void* chunk, uint64_t componentHash, uint32_t index)
 			{
 				auto it = std::find(ComponentHashes.begin(), ComponentHashes.end(), componentHash);
@@ -494,6 +506,13 @@ namespace de2
 			auto entityId = it->second->CreateEntity();
 			EntityPoolMap[entityId] = poolHash;
 			return entityId;
+		}
+
+		template<typename ComponentType>
+		ComponentType* GetComponent(EntityId entity)
+		{
+			auto pool = GetPoolForEntity(entity);
+			return pool->GetComponent(entity, typeid(ComponentType).hash_code());
 		}
 
 		void RunSystem(ISystem* system)

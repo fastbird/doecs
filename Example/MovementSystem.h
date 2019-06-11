@@ -1,6 +1,7 @@
 #pragma once
 #include <iostream>
 #include "../doecs.h"
+#include "../doecs2.h"
 #include "Components.h"
 #include <functional>
 

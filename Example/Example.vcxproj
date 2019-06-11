@@ -127,6 +127,8 @@
     <ClCompile Include="..\doecs2.cpp" />
     <ClCompile Include="EntitySystem.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="test_ecs1.cpp" />
+    <ClCompile Include="test_ecs2.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\doecs.h" />
