@@ -183,6 +183,18 @@ namespace de2
 					delete Next;
 					Next = nullptr;
 				}
+
+				template<std::size_t I>
+				std::enable_if_t<I == sizeof...(ComponentTypes)> SetComponents(uint32_t entityIndex, std::tuple<ComponentTypes&&...>&& source)
+				{
+				}
+
+				template<std::size_t I = 0>
+				std::enable_if_t < I < sizeof...(ComponentTypes)> SetComponents(uint32_t entityIndex, std::tuple<ComponentTypes&&...>&& source)
+				{
+					std::get<I>(Components)[entityIndex] = std::get<I>(source);
+					SetComponents<I + 1>(entityIndex, std::forward<std::tuple<ComponentTypes&& ...>>(source));
+				}
 			};
 
 			static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
@@ -286,6 +298,35 @@ namespace de2
 				return INVALID_ENTITY_ID;
 			}
 
+			
+			EntityId /*ArchetypePool::*/AddEntity(std::tuple<ComponentTypes&&...>&& components) {
+				static_assert(ElementCountPerChunk > 50, "Entity is too big");
+				auto entity = EntityIdGen.Gen();
+				return AddEntity(entity, std::forward<std::tuple<ComponentTypes && ...>>(components));
+			}
+
+			EntityId /*ArchetypePool::*/AddEntity(EntityId entity, std::tuple<ComponentTypes&& ...>&& components) {
+				static_assert(ElementCountPerChunk > 50, "Entity is too big");
+				auto chunk = RootChunk;
+				while (chunk)
+				{
+					if (chunk->Count < ElementCountPerChunk)
+					{
+						auto componentIndex = chunk->Count++;
+						EntityToComponent[entity] = { chunk, componentIndex };
+						chunk->SetComponents(componentIndex, std::forward<std::tuple<ComponentTypes && ...>>(components));
+						return entity;
+					}
+					if (!chunk->Next)
+					{
+						// create new chunk
+						chunk->Next = new Chunk;
+					}
+					chunk = chunk->Next;
+				}
+				return INVALID_ENTITY_ID;
+			}
+
 			uint32_t GetComponents(uint32_t chunkIndex, uint64_t hash, void*& components) override
 			{
 				auto chunk = RootChunk;
@@ -311,7 +352,7 @@ namespace de2
 				uint32_t index;
 				if (HasEntity(entity, chunk, index))
 				{
-					return GetComponent(chunk, componentHash, index)
+					return GetComponent(chunk, componentHash, index);
 				}
 				return nullptr;
 			}
@@ -508,11 +549,35 @@ namespace de2
 			return entityId;
 		}
 
+		template<typename ... ComponentTypes>
+		EntityId /*DOECS::*/AddEntity(ComponentTypes&& ... components) {
+			uint64_t poolHash = 0;
+			impl::ComponentsHash<0, ComponentTypes...>(poolHash);
+			auto it = Pools.find(poolHash);
+			if (it == Pools.end()) {
+				return INVALID_ENTITY_ID;
+			}
+			auto pool = (impl::ArchetypePool<ComponentTypes...>*)(it->second);
+			return pool->AddEntity(std::forward_as_tuple<ComponentTypes...>(std::forward<ComponentTypes>(components)...));
+		}
+
+		template<typename ... ComponentTypes>
+		EntityId /*DOECS::*/AddEntity(EntityId entity, ComponentTypes&& ... components) {
+			uint64_t poolHash = 0;
+			impl::ComponentsHash<0, ComponentTypes...>(poolHash);
+			auto it = Pools.find(poolHash);
+			if (it == Pools.end()) {
+				return INVALID_ENTITY_ID;
+			}
+			auto pool = (impl::ArchetypePool<ComponentTypes...>*)(it->second);
+			return pool->AddEntity(entity, std::forward_as_tuple<ComponentTypes...>(std::forward<ComponentTypes>(components)...));
+		}
+
 		template<typename ComponentType>
 		ComponentType* GetComponent(EntityId entity)
 		{
 			auto pool = GetPoolForEntity(entity);
-			return pool->GetComponent(entity, typeid(ComponentType).hash_code());
+			return (ComponentType*)pool->GetComponent(entity, typeid(ComponentType).hash_code());
 		}
 
 		void RunSystem(ISystem* system)
