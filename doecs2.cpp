@@ -1,3 +1,7 @@
+// Fastbird Engine
+// Written by Jungwan Byun
+// https://fastbirddev.blogspot.com
+
 #include "doecs2.h"
 
 namespace de2

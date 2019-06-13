@@ -1,6 +1,9 @@
 #pragma once
 #ifndef __doecs_header__
 #define __doecs_header__
+// Fastbird Engine
+// Written by Jungwan Byun
+// https://fastbirddev.blogspot.com
 
 #include "doecs_type.h"
 #include <unordered_map>

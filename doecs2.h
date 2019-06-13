@@ -1,4 +1,8 @@
 #pragma once
+// Fastbird Engine
+// Written by Jungwan Byun
+// https://fastbirddev.blogspot.com
+
 #include <cstddef>
 #include <vector>
 #include <unordered_map>
@@ -504,7 +508,8 @@ namespace de2
 
 	class DOECS
 	{
-		std::unordered_map<uint64_t, impl::IArchetypePool*> Pools;
+		using PoolContainer = std::unordered_map<uint64_t, impl::IArchetypePool*>;
+		PoolContainer Pools;
 		std::unordered_map<EntityId, uint64_t> EntityPoolMap;
 		std::vector<ISystem*> Systems;
 		std::unordered_map<ISystem*, std::vector<ISystem*>> SystemDependencies;
@@ -513,11 +518,11 @@ namespace de2
 		~DOECS();
 
 		template<typename ... ComponentTypes>
-		void AddPool()
+		PoolContainer::iterator AddPool()
 		{
 			uint64_t hash = 0;
 			impl::ComponentsHash<0, ComponentTypes...>(hash);
-			Pools.insert({ hash, new impl::ArchetypePool<ComponentTypes...>(hash, { typeid(ComponentTypes).hash_code()... }) });
+			return Pools.insert({ hash, new impl::ArchetypePool<ComponentTypes...>(hash, { typeid(ComponentTypes).hash_code()... }) });
 		}
 
 		void AddSystem(ISystem* system)
@@ -531,20 +536,34 @@ namespace de2
 		}
 
 		template<typename ... ComponentTypes>
-		EntityId CreateEntity()
+		EntityId CreateEntity(bool autoCreatePool = true)
 		{
 			uint64_t poolHash = 0;
+			impl::IArchetypePool* pool = nullptr;
 			impl::ComponentsHash<0, ComponentTypes...>(poolHash);
-			return CreateEntity(poolHash);
+			
+			auto it = Pools.find(poolHash);
+			if (it == Pools.end()) 
+			{
+				if (autoCreatePool) 
+				{
+					it = AddPool<ComponentTypes...>();
+					pool = it->second;
+				}
+			}
+			else {
+				pool = it->second;
+			}
+			if (!pool)
+				return INVALID_ENTITY_ID;
+
+			return CreateEntity(pool, poolHash, autoCreatePool);
 		}
 
-		EntityId CreateEntity(uint64_t poolHash)
+		EntityId CreateEntity(impl::IArchetypePool* pool, uint64_t poolHash, bool autoCreatePool)
 		{
-			auto it = Pools.find(poolHash);
-			if (it == Pools.end()) {
-				return INVALID_ENTITY_ID;
-			}
-			auto entityId = it->second->CreateEntity();
+			assert(pool);
+			auto entityId = pool->CreateEntity();
 			EntityPoolMap[entityId] = poolHash;
 			return entityId;
 		}

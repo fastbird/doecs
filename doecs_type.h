@@ -1,6 +1,10 @@
 #pragma once
 #ifndef __doecs_type_header__
 #define __doecs_type_header__
+// Fastbird Engine
+// Written by Jungwan Byun
+// https://fastbirddev.blogspot.com
+
 #include <stdint.h>
 #include <unordered_map>
 namespace de
