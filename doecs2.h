@@ -87,16 +87,55 @@ namespace de2
 			static const auto Value = (sizeof(TFirst) + SizeOf<TRemaining...>::Value);
 		};
 
+		template <class _Ty, class _Alloc = std::allocator<_Ty>>
+		class SortedVector : public std::vector<_Ty, _Alloc> {
+			using super = std::vector<_Ty, _Alloc>;
+			using iterator = typename std::vector<_Ty, _Alloc>::iterator;
+
+		public:
+			iterator insert(const _Ty& v) {
+				iterator it = std::lower_bound(super::begin(), super::end(), v);
+				if (it != super::end() && *it == v) {
+					*it = v;
+				}
+				else {
+					it = super::insert(it, v);
+				}
+				return it;
+			}
+
+			bool contains(const _Ty& v) const {
+				return std::binary_search(super::begin(), super::end(), v);
+			}
+
+			bool erase(const _Ty& v) {
+				auto it = std::lower_bound(super::begin(), super::end(), v);
+				if (it != super::end() && *it == v) {
+					super::erase(it);
+					return true;
+				}
+				return false;
+			}
+
+		private:
+			void push_back(const _Ty& v) = delete;
+		};
+
+		//
+		// IArchetypePool
+		//
 		class IArchetypePool
 		{
 		public:
 			virtual bool IsPoolFor(uint64_t componentHash) = 0;
 			virtual bool IsPoolFor(ISystem* system) = 0;
 			virtual EntityId CreateEntity() = 0;
+			virtual bool RemoveEntity(EntityId entity) = 0;
 			virtual uint32_t GetComponents(uint32_t chunkIndex, uint64_t hash, void*& components) = 0;
 			virtual void* GetComponent(EntityId entity, uint64_t componentHash) = 0;
 			virtual void PushEvent(EntityId entId, IEvent* evt) = 0;
 			virtual void RunEvents() = 0;
+			virtual void Flush() = 0;
 		};
 
 		template<typename ... ComponentTypes>
@@ -107,6 +146,7 @@ namespace de2
 
 		public:
 			using Tuple = std::tuple<ComponentTypes...>;
+			using MovedFromTo = std::pair<uint32_t, uint32_t>;
 			static constexpr uint32_t EntitySize = SizeOf<ComponentTypes...>::Value;
 			static constexpr uint32_t ElementCountPerChunk = (ChunkSize - sizeof(void*) - sizeof(uint32_t)) / EntitySize;
 			static constexpr uint32_t ComponentCount = sizeof...(ComponentTypes);
@@ -115,6 +155,7 @@ namespace de2
 			{
 			public:
 				std::tuple<std::array<ComponentTypes, ElementCountPerChunk>...> Components;
+				constexpr static uint32_t InvalidIndex = -1;
 				uint32_t Count = 0;
 				Chunk* Next = nullptr;
 
@@ -199,13 +240,77 @@ namespace de2
 					std::get<I>(Components)[entityIndex] = std::get<I>(source);
 					SetComponents<I + 1>(entityIndex, std::forward<std::tuple<ComponentTypes&& ...>>(source));
 				}
+
+				uint32_t FindLastValidIndexWhileRemoving(const std::vector<uint32_t>& entities,
+					const std::vector<MovedFromTo>& invalidatedIndex) const
+				{
+					assert(!entities.empty());
+					if (Count == 0)
+						return InvalidIndex;
+
+					for (uint32_t i = Count - 1; i >= 0; --i) {
+						if (std::find_if(invalidatedIndex.begin(), invalidatedIndex.end(), [i](const MovedFromTo& v) {return v.first == i; })
+							!= invalidatedIndex.end())
+							continue;
+
+						if (i > entities.back())
+							return i;
+
+						if (std::find(entities.rbegin(), entities.rend(), i) == entities.rend())
+							return i;
+					}
+					return InvalidIndex;
+				}
+
+				std::vector<MovedFromTo> /*Chunk::*/RemoveEntities(const std::vector<uint32_t>& entities)
+				{
+					assert(!entities.empty());
+					assert(entities.size() <= Count);
+					std::vector<MovedFromTo> invalidatedIndex;
+					for (uint32_t index : entities) {
+						uint32_t lastValidIndex = FindLastValidIndexWhileRemoving(entities, invalidatedIndex);
+						if (lastValidIndex != InvalidIndex) {
+							Memcpy<0>(index, lastValidIndex);
+							invalidatedIndex.push_back({ lastValidIndex, index });
+						}
+						--Count;
+					}
+					return invalidatedIndex;
+				}
+
+				template<std::size_t I>
+				std::enable_if_t<I == sizeof...(ComponentTypes)> Memcpy(uint32_t dest, uint32_t src)
+				{
+				}
+
+				template<std::size_t I = 0>
+				std::enable_if_t < I < sizeof...(ComponentTypes)> Memcpy(uint32_t dest, uint32_t src)
+				{
+					auto& componentArray = std::get<I>(Components);
+					memcpy(&componentArray[dest], &componentArray[src],
+						sizeof(std::remove_reference_t<decltype(componentArray)>::value_type));
+					Memcpy<I + 1>(dest, src);
+				}
 			};
 
 			static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
 			Chunk* RootChunk;
 			std::unordered_map<EntityId, std::pair<Chunk*, uint32_t> > EntityToComponent;
+			std::unordered_map<Chunk*, std::array<EntityId, ElementCountPerChunk>> EntityIdsPerChunk;
 			std::unordered_map<EntityId, std::vector<IEvent*>> Events;
-			std::vector<EntityId> PendingRemove;
+
+			struct RemovingEntity {
+				EntityId Entity;
+				Chunk* Chunk;
+				uint32_t Index;
+				bool operator ==(const RemovingEntity& other) const { return Entity == other.Entity; }
+				bool operator <(const RemovingEntity& other) const {
+					return Chunk < other.Chunk ||
+						Chunk == other.Chunk && Index < other.Index;
+				}
+			};
+
+			SortedVector<RemovingEntity> PendingRemove;
 			std::mutex Mutex;
 
 		public:
@@ -248,11 +353,42 @@ namespace de2
 				return true;
 			}
 
-			void Flush()
+			void RecacheMovedEntities(Chunk* chunk, std::vector<MovedFromTo>&& movedEntities) {
+				auto& entityIds = EntityIdsPerChunk[chunk];
+				for (auto& it : movedEntities) {
+					entityIds[it.second] = entityIds[it.first];
+					EntityToComponent[entityIds[it.second]] = { chunk, it.second };
+					EntityToComponent.erase(entityIds[it.first]);
+					entityIds[it.first] = 0;
+				}
+			}
+
+			void /*ArchetypePool::*/Flush() override
 			{
-				std::sort(PendingRemove.begin(), PendingRemove.end());
-				PendingRemove.erase(std::unique(PendingRemove.begin(), PendingRemove.end()), PendingRemove.end());
-				while (!PendingRemove.empty()) {
+				std::vector<uint32_t> indexToRemove;
+				Chunk* lastChunk = nullptr;
+				for (size_t i = 0; i < PendingRemove.size(); ++i)
+				{
+					if (lastChunk == nullptr || lastChunk == PendingRemove[i].Chunk) {
+						lastChunk = PendingRemove[i].Chunk;
+						indexToRemove.push_back(PendingRemove[i].Index);
+					}
+					else {
+						if (!indexToRemove.empty()) {
+							RecacheMovedEntities(lastChunk, lastChunk->RemoveEntities(indexToRemove));
+							indexToRemove.clear();
+						}
+						lastChunk = PendingRemove[i].Chunk;
+						indexToRemove.push_back(PendingRemove[i].Index);
+					}
+				}
+				if (!indexToRemove.empty()) {
+					RecacheMovedEntities(lastChunk, lastChunk->RemoveEntities(indexToRemove));
+				}
+				PendingRemove.clear();
+
+				
+				/*while (!PendingRemove.empty()) {
 					auto rit = PendingRemove.rbegin();
 					int consecutiveCount = 1;
 					void* chunk;
@@ -276,21 +412,22 @@ namespace de2
 					}
 					PendingRemove.erase(PendingRemove.end() - consecutiveCount, PendingRemove.end());
 					Memmove((Chunk*)chunk, index, consecutiveCount);
-				}
+				}*/
 			}
 
 			EntityId CreateEntity() override
 			{
 				static_assert(ElementCountPerChunk > 50, "Entity is too big");
-				auto entityId = EntityIdGen.Gen();
+				auto entity = EntityIdGen.Gen();
 				auto chunk = RootChunk;
 				while (chunk)
 				{
 					if (chunk->Count < ElementCountPerChunk)
 					{
 						auto componentIndex = chunk->Count++;
-						EntityToComponent[entityId] = { chunk, componentIndex };
-						return entityId;
+						EntityToComponent[entity] = { chunk, componentIndex };
+						EntityIdsPerChunk[chunk][componentIndex] = entity;
+						return entity;
 					}
 					if (!chunk->Next)
 					{
@@ -318,6 +455,7 @@ namespace de2
 					{
 						auto componentIndex = chunk->Count++;
 						EntityToComponent[entity] = { chunk, componentIndex };
+						EntityIdsPerChunk[chunk][componentIndex] = entity;
 						chunk->SetComponents(componentIndex, std::forward<std::tuple<ComponentTypes && ...>>(components));
 						return entity;
 					}
@@ -330,6 +468,7 @@ namespace de2
 				}
 				return INVALID_ENTITY_ID;
 			}
+
 
 			uint32_t GetComponents(uint32_t chunkIndex, uint64_t hash, void*& components) override
 			{
@@ -448,14 +587,14 @@ namespace de2
 				Memmove<I + 1>(chunk, removingIndex, consecutiveCount);
 			}
 
-			bool RemoveEntity(EntityId id)
+			bool RemoveEntity(EntityId entity) override
 			{
 				void* chunk;
 				uint32_t index;
-				if (HasEntity(id, chunk, index))
+				if (HasEntity(entity, chunk, index))
 				{
 					std::lock_guard l(Mutex);
-					PendingRemove.push_back(id);
+					PendingRemove.insert(RemovingEntity{ entity, (Chunk*)chunk, index });
 					return true;
 				}
 				return false;
@@ -522,7 +661,7 @@ namespace de2
 		{
 			uint64_t hash = 0;
 			impl::ComponentsHash<0, ComponentTypes...>(hash);
-			return Pools.insert({ hash, new impl::ArchetypePool<ComponentTypes...>(hash, { typeid(ComponentTypes).hash_code()... }) });
+			return Pools.insert({ hash, new impl::ArchetypePool<ComponentTypes...>(hash, { typeid(ComponentTypes).hash_code()... }) }).first;
 		}
 
 		void AddSystem(ISystem* system)
@@ -563,9 +702,9 @@ namespace de2
 		EntityId CreateEntity(impl::IArchetypePool* pool, uint64_t poolHash, bool autoCreatePool)
 		{
 			assert(pool);
-			auto entityId = pool->CreateEntity();
-			EntityPoolMap[entityId] = poolHash;
-			return entityId;
+			auto entity = pool->CreateEntity();
+			EntityPoolMap[entity] = poolHash;
+			return entity;
 		}
 
 		template<typename ... ComponentTypes>
@@ -577,7 +716,9 @@ namespace de2
 				return INVALID_ENTITY_ID;
 			}
 			auto pool = (impl::ArchetypePool<ComponentTypes...>*)(it->second);
-			return pool->AddEntity(std::forward_as_tuple<ComponentTypes...>(std::forward<ComponentTypes>(components)...));
+			auto entity = pool->AddEntity(std::forward_as_tuple<ComponentTypes...>(std::forward<ComponentTypes>(components)...));
+			EntityPoolMap[entity] = poolHash;
+			return entity;
 		}
 
 		template<typename ... ComponentTypes>
@@ -589,7 +730,16 @@ namespace de2
 				return INVALID_ENTITY_ID;
 			}
 			auto pool = (impl::ArchetypePool<ComponentTypes...>*)(it->second);
-			return pool->AddEntity(entity, std::forward_as_tuple<ComponentTypes...>(std::forward<ComponentTypes>(components)...));
+			entity = pool->AddEntity(entity, std::forward_as_tuple<ComponentTypes...>(std::forward<ComponentTypes>(components)...));
+			EntityPoolMap[entity] = poolHash;
+			return entity;
+		}
+
+		bool RemoveEntity(EntityId entity) {
+			auto pool = GetPoolForEntity(entity);
+			if (!pool)
+				return false;
+			return pool->RemoveEntity(entity);
 		}
 
 		template<typename ComponentType>
@@ -660,11 +810,18 @@ namespace de2
 			}
 		}
 
+		void Flush()
+		{
+			for (auto& pool : Pools) {
+				pool.second->Flush();
+			}
+		}
+
 	private:
 		impl::IArchetypePool* GetPoolForEntity(EntityId entId) {
 			auto it = EntityPoolMap.find(entId);
 			if (it != EntityPoolMap.end()) {
-				Pools.find(it->second)->second;
+				return Pools.find(it->second)->second;
 			}
 			return nullptr;
 		}
