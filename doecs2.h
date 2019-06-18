@@ -11,6 +11,16 @@
 #include <algorithm>
 
 #include "doecs_type.h"
+
+// Platform dependent code
+#ifndef DLL_EXPORT
+#	ifdef _WINDLL
+#		define DLL_EXPORT __declspec(dllexport)
+#	else
+#		define DLL_EXPORT __declspec(dllimport)
+#	endif //_WINDLL
+#endif
+
 namespace de2
 {
 	class DOECS;
@@ -54,7 +64,7 @@ namespace de2
 				return NextId++;
 			}
 		};
-		extern FEntityIdGen EntityIdGen;
+		DLL_EXPORT extern FEntityIdGen EntityIdGen;
 
 		template <class T>
 		uint64_t hash_combine(uint64_t& seed, const T& v)
@@ -133,6 +143,7 @@ namespace de2
 			virtual bool RemoveEntity(EntityId entity) = 0;
 			virtual uint32_t GetComponents(uint32_t chunkIndex, uint64_t hash, void*& components) = 0;
 			virtual void* GetComponent(EntityId entity, uint64_t componentHash) = 0;
+			virtual void* SetComponent(EntityId entity, uint64_t componentHash, void* comp) = 0;
 			virtual void PushEvent(EntityId entId, IEvent* evt) = 0;
 			virtual void RunEvents() = 0;
 			virtual void Flush() = 0;
@@ -217,6 +228,26 @@ namespace de2
 					}
 					else {
 						return GetComponent<I + 1>(componentTupleIndex, entityIndex);
+					}
+				}
+
+				template<std::size_t I>
+				std::enable_if_t<I == sizeof...(ComponentTypes), void*> SetComponent(uint32_t componentTupleIndex, uint32_t entityIndex, void* compData)
+				{
+					return nullptr;
+				}
+
+				template<std::size_t I = 0>
+				std::enable_if_t < I < sizeof...(ComponentTypes), void*> SetComponent(uint32_t componentTupleIndex, uint32_t entityIndex, void* compData)
+				{
+					if (I == componentTupleIndex) {
+						auto& componentArray = std::get<I>(Components);
+						auto* comp = &componentArray[entityIndex];
+						memcpy(comp, compData, sizeof(std::remove_reference_t<decltype(componentArray)>::value_type));
+						return comp;
+					}
+					else {
+						return SetComponent<I + 1>(componentTupleIndex, entityIndex);
 					}
 				}
 
@@ -438,7 +469,6 @@ namespace de2
 				}
 				return INVALID_ENTITY_ID;
 			}
-
 			
 			EntityId /*ArchetypePool::*/AddEntity(std::tuple<ComponentTypes&&...>&& components) {
 				static_assert(ElementCountPerChunk > 50, "Entity is too big");
@@ -486,7 +516,7 @@ namespace de2
 				if (it == ComponentHashes.end())
 					return 0;
 
-				return chunk->GetComponents(std::distance(ComponentHashes.begin(), it), components);
+				return chunk->GetComponents((uint32_t)std::distance(ComponentHashes.begin(), it), components);
 			}
 
 			void* GetComponent(EntityId entity, uint64_t componentHash) override
@@ -504,15 +534,35 @@ namespace de2
 			{
 				auto it = std::find(ComponentHashes.begin(), ComponentHashes.end(), componentHash);
 				if (it == ComponentHashes.end())
-					return 0;
+					return nullptr;
 
-				return ((Chunk*)chunk)->GetComponent(std::distance(ComponentHashes.begin(), it), index);
+				return ((Chunk*)chunk)->GetComponent((uint32_t)std::distance(ComponentHashes.begin(), it), index);
 			}
 
 			template<typename ComponentType>
 			ComponentType* GetComponent(void* chunk, uint32_t index)
 			{
 				return ((Chunk*)chunk)->GetComponent<ComponentType>(index);
+			}
+
+			void* SetComponent(EntityId entity, uint64_t componentHash, void* comp) override
+			{
+				void* chunk;
+				uint32_t index;
+				if (HasEntity(entity, chunk, index))
+				{
+					return GetComponent(chunk, componentHash, index);
+				}
+				return nullptr;
+			}
+
+			void* SetComponent(void* chunk, uint64_t componentHash, uint32_t index, void* comp)
+			{
+				auto it = std::find(ComponentHashes.begin(), ComponentHashes.end(), componentHash);
+				if (it == ComponentHashes.end())
+					return nullptr;
+
+				return ((Chunk*)chunk)->SetComponent(std::distance(ComponentHashes.begin(), it), index, comp);
 			}
 
 			bool HasEntity(EntityId id, void*& chunk, uint32_t& index)
@@ -696,14 +746,10 @@ namespace de2
 			if (!pool)
 				return INVALID_ENTITY_ID;
 
-			return CreateEntity(pool, poolHash, autoCreatePool);
-		}
-
-		EntityId CreateEntity(impl::IArchetypePool* pool, uint64_t poolHash, bool autoCreatePool)
-		{
-			assert(pool);
 			auto entity = pool->CreateEntity();
-			EntityPoolMap[entity] = poolHash;
+			if (entity != INVALID_ENTITY_ID) {
+				EntityPoolMap[entity] = poolHash;
+			}
 			return entity;
 		}
 
@@ -735,7 +781,7 @@ namespace de2
 			return entity;
 		}
 
-		bool RemoveEntity(EntityId entity) {
+		bool /*DOECS::*/RemoveEntity(EntityId entity) {
 			auto pool = GetPoolForEntity(entity);
 			if (!pool)
 				return false;
@@ -746,7 +792,18 @@ namespace de2
 		ComponentType* GetComponent(EntityId entity)
 		{
 			auto pool = GetPoolForEntity(entity);
+			if (!pool)
+				return nullptr;
 			return (ComponentType*)pool->GetComponent(entity, typeid(ComponentType).hash_code());
+		}
+
+		template<typename ComponentType>
+		ComponentType* SetComponent(EntityId entity, ComponentType&& comp)
+		{
+			auto pool = GetPoolForEntity(entity);
+			if (!pool)
+				return nullptr;
+			return (ComponentType*)pool->SetComponent(entity, typeid(ComponentType).hash_code(), &comp);
 		}
 
 		void RunSystem(ISystem* system)

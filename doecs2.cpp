@@ -4,10 +4,16 @@
 
 #include "doecs2.h"
 
+// Platform dependent code
+#ifdef _WINDLL
+#		define DLL_EXPORT __declspec(dllexport)
+#	else
+#		define DLL_EXPORT __declspec(dllimport)
+#	endif //_WINDLL
 namespace de2
 {
 	namespace impl {
-		FEntityIdGen EntityIdGen;
+		DLL_EXPORT FEntityIdGen EntityIdGen;
 	}
 
 	DOECS::~DOECS()
