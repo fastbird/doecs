@@ -12,6 +12,11 @@
 
 #include "doecs_type.h"
 
+#ifndef DOECS_IN_DLL
+#define DOECS_IN_DLL 0
+#endif
+
+#if DOECS_IN_DLL
 // Platform dependent code
 #ifndef DLL_EXPORT
 #	ifdef _WINDLL
@@ -19,6 +24,12 @@
 #	else
 #		define DLL_EXPORT __declspec(dllimport)
 #	endif //_WINDLL
+#endif
+
+#else
+#ifndef DLL_EXPORT
+#	define DLL_EXPORT 	
+#endif
 #endif
 
 namespace de2
@@ -51,7 +62,6 @@ namespace de2
 		constexpr int ChunkSize = 16 * 1024; // Usually CPU has 32 kb L1 cache including instruction and data cache.
 		constexpr int CacheLineSize = 64;
 		class FEntityIdGen {
-			std::mutex Mutex;
 			EntityId NextId = 1;
 
 		public:
@@ -60,11 +70,11 @@ namespace de2
 				: NextId(startId) {}
 
 			EntityId Gen() {
-				std::lock_guard l(Mutex);
 				return NextId++;
 			}
 		};
-		DLL_EXPORT extern FEntityIdGen EntityIdGen;
+
+		DLL_EXPORT EntityId GenerateEntityId();
 
 		template <class T>
 		uint64_t hash_combine(uint64_t& seed, const T& v)
@@ -449,7 +459,7 @@ namespace de2
 			EntityId CreateEntity() override
 			{
 				static_assert(ElementCountPerChunk > 50, "Entity is too big");
-				auto entity = EntityIdGen.Gen();
+				auto entity = GenerateEntityId();
 				auto chunk = RootChunk;
 				while (chunk)
 				{
@@ -472,7 +482,7 @@ namespace de2
 			
 			EntityId /*ArchetypePool::*/AddEntity(std::tuple<ComponentTypes&&...>&& components) {
 				static_assert(ElementCountPerChunk > 50, "Entity is too big");
-				auto entity = EntityIdGen.Gen();
+				auto entity = GenerateEntityId();
 				return AddEntity(entity, std::forward<std::tuple<ComponentTypes && ...>>(components));
 			}
 
