@@ -169,13 +169,13 @@ namespace de2
 			using Tuple = std::tuple<ComponentTypes...>;
 			using MovedFromTo = std::pair<uint32_t, uint32_t>;
 			static constexpr uint32_t EntitySize = SizeOf<ComponentTypes...>::Value;
-			static constexpr uint32_t ElementCountPerChunk = (ChunkSize - sizeof(void*) - sizeof(uint32_t)) / EntitySize;
+			static constexpr uint32_t EntityCountPerChunk = (ChunkSize - sizeof(void*) - sizeof(uint32_t)) / EntitySize;
 			static constexpr uint32_t ComponentCount = sizeof...(ComponentTypes);
 
 			struct Chunk
 			{
 			public:
-				std::tuple<std::array<ComponentTypes, ElementCountPerChunk>...> Components;
+				std::tuple<std::array<ComponentTypes, EntityCountPerChunk>...> Components;
 				constexpr static uint32_t InvalidIndex = -1;
 				uint32_t Count = 0;
 				Chunk* Next = nullptr;
@@ -203,7 +203,7 @@ namespace de2
 				template<typename ComponentType>
 				ComponentType* GetComponent(uint32_t index)
 				{
-					return &std::get<std::array<ComponentType, ElementCountPerChunk>>(Components)[index];
+					return &std::get<std::array<ComponentType, EntityCountPerChunk>>(Components)[index];
 				}
 
 				template<std::size_t I>
@@ -337,7 +337,7 @@ namespace de2
 			static_assert(sizeof(Chunk) <= ChunkSize, "Invalid chunk size. Array alignment problem?");
 			Chunk* RootChunk;
 			std::unordered_map<EntityId, std::pair<Chunk*, uint32_t> > EntityToComponent;
-			std::unordered_map<Chunk*, std::array<EntityId, ElementCountPerChunk>> EntityIdsPerChunk;
+			std::unordered_map<Chunk*, std::array<EntityId, EntityCountPerChunk>> EntityIdsPerChunk;
 			std::unordered_map<EntityId, std::vector<IEvent*>> Events;
 
 			struct RemovingEntity {
@@ -458,13 +458,13 @@ namespace de2
 
 			EntityId CreateEntity() override
 			{
-				static_assert(ElementCountPerChunk > 50, "Entity is too big");
-				auto entity = GenerateEntityId();
+				static_assert(EntityCountPerChunk > 50, "Entity is too big");
 				auto chunk = RootChunk;
 				while (chunk)
 				{
-					if (chunk->Count < ElementCountPerChunk)
+					if (chunk->Count < EntityCountPerChunk)
 					{
+						auto entity = GenerateEntityId();
 						auto componentIndex = chunk->Count++;
 						EntityToComponent[entity] = { chunk, componentIndex };
 						EntityIdsPerChunk[chunk][componentIndex] = entity;
@@ -481,17 +481,17 @@ namespace de2
 			}
 			
 			EntityId /*ArchetypePool::*/AddEntity(std::tuple<ComponentTypes&&...>&& components) {
-				static_assert(ElementCountPerChunk > 50, "Entity is too big");
+				static_assert(EntityCountPerChunk > 50, "Entity is too big");
 				auto entity = GenerateEntityId();
 				return AddEntity(entity, std::forward<std::tuple<ComponentTypes && ...>>(components));
 			}
 
 			EntityId /*ArchetypePool::*/AddEntity(EntityId entity, std::tuple<ComponentTypes&& ...>&& components) {
-				static_assert(ElementCountPerChunk > 50, "Entity is too big");
+				static_assert(EntityCountPerChunk > 50, "Entity is too big");
 				auto chunk = RootChunk;
 				while (chunk)
 				{
-					if (chunk->Count < ElementCountPerChunk)
+					if (chunk->Count < EntityCountPerChunk)
 					{
 						auto componentIndex = chunk->Count++;
 						EntityToComponent[entity] = { chunk, componentIndex };
@@ -592,7 +592,7 @@ namespace de2
 			{
 				assert(consecutiveCount >= 1);
 				auto numNeedToMove = (chunk->Count - (removingIndex + consecutiveCount));
-				if (chunk->Count == ElementCountPerChunk) {
+				if (chunk->Count == EntityCountPerChunk) {
 					if (numNeedToMove) {
 						auto& componentArray = std::get<I>(chunk->Components);
 						memmove(&componentArray[removingIndex],
@@ -604,7 +604,7 @@ namespace de2
 						auto nextChunk = chunk->Next;
 						auto& nextComponentArray = std::get<I>(nextChunk->Components);
 						auto numCopyFromNextChunk = std::min(consecutiveCount, nextChunk->Count);
-						memcpy(&componentArray[ElementCountPerChunk - consecutiveCount],
+						memcpy(&componentArray[EntityCountPerChunk - consecutiveCount],
 							&nextComponentArray[0],
 							sizeof(std::remove_reference_t<decltype(componentArray)>::value_type) * numCopyFromNextChunk);
 						MemmoveRecursive<I>(nextChunk, 0, numCopyFromNextChunk);
