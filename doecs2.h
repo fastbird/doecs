@@ -41,7 +41,7 @@ namespace de2
 		volatile bool Done = false;
 
 		virtual std::size_t GetComponentHashes(const uint64_t*& pHashes) = 0;
-		virtual void Execute(uint32_t elementCount, const de2::ComponentsArg& components) = 0;
+		virtual void Execute(uint32_t entityCount, const de2::ComponentsArg& components) = 0;
 	};
 
 	class IEvent
@@ -257,7 +257,7 @@ namespace de2
 						return comp;
 					}
 					else {
-						return SetComponent<I + 1>(componentTupleIndex, entityIndex);
+						return SetComponent<I + 1>(componentTupleIndex, entityIndex, compData);
 					}
 				}
 
@@ -535,12 +535,12 @@ namespace de2
 				uint32_t index;
 				if (HasEntity(entity, chunk, index))
 				{
-					return GetComponent(chunk, componentHash, index);
+					return GetComponent(chunk, index, componentHash);
 				}
 				return nullptr;
 			}
 
-			void* GetComponent(void* chunk, uint64_t componentHash, uint32_t index)
+			void* GetComponent(void* chunk, uint32_t index, uint64_t componentHash)
 			{
 				auto it = std::find(ComponentHashes.begin(), ComponentHashes.end(), componentHash);
 				if (it == ComponentHashes.end())
@@ -561,18 +561,18 @@ namespace de2
 				uint32_t index;
 				if (HasEntity(entity, chunk, index))
 				{
-					return GetComponent(chunk, componentHash, index);
+					return SetComponent(chunk, index, componentHash, comp);
 				}
 				return nullptr;
 			}
 
-			void* SetComponent(void* chunk, uint64_t componentHash, uint32_t index, void* comp)
+			void* SetComponent(void* chunk, uint32_t index, uint64_t componentHash, void* comp)
 			{
 				auto it = std::find(ComponentHashes.begin(), ComponentHashes.end(), componentHash);
 				if (it == ComponentHashes.end())
 					return nullptr;
 
-				return ((Chunk*)chunk)->SetComponent(std::distance(ComponentHashes.begin(), it), index, comp);
+				return ((Chunk*)chunk)->SetComponent((uint32_t)std::distance(ComponentHashes.begin(), it), index, comp);
 			}
 
 			bool HasEntity(EntityId id, void*& chunk, uint32_t& index)
@@ -677,7 +677,7 @@ namespace de2
 							ComponentsArg components;
 							for (size_t i = 0; i < count; ++i)
 							{
-								auto pComponent = GetComponent(chunk, componentHashes[i], index);
+								auto pComponent = GetComponent(chunk, index, componentHashes[i]);
 								assert(pComponent);
 								components.push_back(pComponent);
 							}
@@ -798,14 +798,14 @@ namespace de2
 			return pool->RemoveEntity(entity);
 		}
 
-		template<typename ComponentType>
-		ComponentType* GetComponent(EntityId entity)
-		{
-			auto pool = GetPoolForEntity(entity);
-			if (!pool)
-				return nullptr;
-			return (ComponentType*)pool->GetComponent(entity, typeid(ComponentType).hash_code());
-		}
+			template<typename ComponentType>
+			ComponentType* GetComponent(EntityId entity)
+			{
+				auto pool = GetPoolForEntity(entity);
+				if (!pool)
+					return nullptr;
+				return (ComponentType*)pool->GetComponent(entity, typeid(ComponentType).hash_code());
+			}
 
 		template<typename ComponentType>
 		ComponentType* SetComponent(EntityId entity, ComponentType&& comp)
