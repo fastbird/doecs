@@ -835,7 +835,7 @@ namespace de2
 							void* components = nullptr;
 							uint32_t count_ = pool.second->GetComponents(chunkIndex, componentHashes[c], components);
 
-							if (count == 0 || components == nullptr) {
+							if (count_ == 0 || components == nullptr) {
 								checkNextChunk = false;
 								break;
 							}
@@ -843,7 +843,8 @@ namespace de2
 							count = count_;
 							requiredComponents.push_back(components);
 						}
-						system->Execute(count, requiredComponents);
+						if (count > 0 && componentCount == requiredComponents.size())
+							system->Execute(count, requiredComponents);
 						++chunkIndex;
 					}
 				}
